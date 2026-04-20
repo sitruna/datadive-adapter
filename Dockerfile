@@ -10,8 +10,8 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# Install supergateway globally
-RUN npm install -g supergateway
+# Install supergateway globally (pinned for reproducibility)
+RUN npm install -g supergateway@3.4.3
 
 ENV NODE_ENV=production
 # PORT is set by Railway automatically
@@ -19,4 +19,7 @@ ENV NODE_ENV=production
 
 EXPOSE 3000
 
-CMD sh -c "supergateway --stdio 'node /app/dist/index.js' --port ${PORT:-3000}"
+# Stateful Streamable HTTP mode: spawns a fresh stdio subprocess per MCP session,
+# fixing the "Already connected to a transport" crash on concurrent clients.
+# MCP endpoint: /mcp  |  Railway healthcheck endpoint: /sse (returns "ok").
+CMD sh -c "supergateway --stdio 'node /app/dist/index.js' --outputTransport streamableHttp --stateful --sessionTimeout 600000 --port ${PORT:-3000} --healthEndpoint /sse"
