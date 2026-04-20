@@ -22,4 +22,4 @@ EXPOSE 3000
 # Stateful Streamable HTTP mode: spawns a fresh stdio subprocess per MCP session,
 # fixing the "Already connected to a transport" crash on concurrent clients.
 # MCP endpoint: /mcp  |  Railway healthcheck endpoint: /sse (returns "ok").
-CMD sh -c "supergateway --stdio 'node /app/dist/index.js' --outputTransport streamableHttp --stateful --sessionTimeout 600000 --port ${PORT:-3000} --healthEndpoint /sse"
+CMD sh -c "supergateway --stdio 'node /app/dist/index.js' --outputTransport streamableHttp --port ${PORT:-3000} --healthEndpoint /sse"
