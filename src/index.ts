@@ -314,6 +314,15 @@ server.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  const shutdown = () => setTimeout(() => process.exit(0), 2_000).unref();
+  process.stdin.on("close", shutdown);
+  process.stdin.on("end", shutdown);
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    const uptime = Math.floor((Date.now() - startedAt) / 1000);
+    console.error(`[datadive-adapter] alive pid=${process.pid} uptime=${uptime}s`);
+  }, 300_000);
+  heartbeat.unref();
 }
 
 main().catch((err) => {

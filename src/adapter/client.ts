@@ -13,6 +13,8 @@ export class DataDiveApiError extends Error {
   }
 }
 
+type RetryPolicy = "safe" | "rate-limit-only";
+
 export class DataDiveClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -39,129 +41,135 @@ export class DataDiveClient {
     this.bucket = opts?.bucket ?? new TokenBucket();
   }
 
-  async get<T>(path: string, schema: ZodSchema<T>, params?: Record<string, string | number | undefined>): Promise<T> {
+  private async request<T>(
+    url: string,
+    init: RequestInit,
+    schema: ZodSchema<T>,
+    policy: RetryPolicy
+  ): Promise<T> {
     await this.bucket.acquire();
 
+    const maxAttempts = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        const res = await fetch(url, { ...init, signal: controller.signal });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => undefined);
+          const err = new DataDiveApiError(
+            `DataDive API ${res.status}: ${res.statusText}`,
+            res.status,
+            body
+          );
+          if (canRetry(res.status, policy) && attempt < maxAttempts) {
+            await sleep(retryDelayMs(res, attempt));
+            lastErr = err;
+            continue;
+          }
+          throw err;
+        }
+
+        const json = await res.json();
+        return schema.parse(json);
+      } catch (err) {
+        if (err instanceof DataDiveApiError) throw err;
+        if (err instanceof Error && err.name === "AbortError") {
+          const timeoutErr = new DataDiveApiError(
+            `DataDive API request timed out after ${this.timeoutMs}ms`,
+            408
+          );
+          if (policy === "safe" && attempt < maxAttempts) {
+            await sleep(backoffMs(attempt));
+            lastErr = timeoutErr;
+            continue;
+          }
+          throw timeoutErr;
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error("DataDive request failed");
+  }
+
+  async get<T>(
+    path: string,
+    schema: ZodSchema<T>,
+    params?: Record<string, string | number | undefined>
+  ): Promise<T> {
     const url = new URL(path, this.baseUrl);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         if (v != null) url.searchParams.set(k, String(v));
       }
     }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    try {
-      const res = await fetch(url.toString(), {
-        headers: { "x-api-key": this.apiKey },
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const body = await res.text().catch(() => undefined);
-        throw new DataDiveApiError(
-          `DataDive API ${res.status}: ${res.statusText}`,
-          res.status,
-          body
-        );
-      }
-
-      const json = await res.json();
-      return schema.parse(json);
-    } catch (err) {
-      if (err instanceof DataDiveApiError) throw err;
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new DataDiveApiError(
-          `DataDive API request timed out after ${this.timeoutMs}ms`,
-          408
-        );
-      }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.request(
+      url.toString(),
+      { headers: { "x-api-key": this.apiKey } },
+      schema,
+      "safe"
+    );
   }
 
-  async post<T>(path: string, schema: ZodSchema<T>, body?: Record<string, unknown>): Promise<T> {
-    await this.bucket.acquire();
-
+  async post<T>(
+    path: string,
+    schema: ZodSchema<T>,
+    body?: Record<string, unknown>
+  ): Promise<T> {
     const url = new URL(path, this.baseUrl);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    try {
-      const res = await fetch(url.toString(), {
+    return this.request(
+      url.toString(),
+      {
         method: "POST",
         headers: {
           "x-api-key": this.apiKey,
           "Content-Type": "application/json",
         },
         body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => undefined);
-        throw new DataDiveApiError(
-          `DataDive API ${res.status}: ${res.statusText}`,
-          res.status,
-          text
-        );
-      }
-
-      const json = await res.json();
-      return schema.parse(json);
-    } catch (err) {
-      if (err instanceof DataDiveApiError) throw err;
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new DataDiveApiError(
-          `DataDive API request timed out after ${this.timeoutMs}ms`,
-          408
-        );
-      }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
+      },
+      schema,
+      "rate-limit-only"
+    );
   }
 
   async delete<T>(path: string, schema: ZodSchema<T>): Promise<T> {
-    await this.bucket.acquire();
-
     const url = new URL(path, this.baseUrl);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    try {
-      const res = await fetch(url.toString(), {
-        method: "DELETE",
-        headers: { "x-api-key": this.apiKey },
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => undefined);
-        throw new DataDiveApiError(
-          `DataDive API ${res.status}: ${res.statusText}`,
-          res.status,
-          text
-        );
-      }
-
-      const json = await res.json();
-      return schema.parse(json);
-    } catch (err) {
-      if (err instanceof DataDiveApiError) throw err;
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new DataDiveApiError(
-          `DataDive API request timed out after ${this.timeoutMs}ms`,
-          408
-        );
-      }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.request(
+      url.toString(),
+      { method: "DELETE", headers: { "x-api-key": this.apiKey } },
+      schema,
+      "rate-limit-only"
+    );
   }
+}
+
+function canRetry(status: number, policy: RetryPolicy): boolean {
+  if (status === 429) return true;
+  if (policy === "safe") {
+    return status === 408 || (status >= 500 && status < 600);
+  }
+  return false;
+}
+
+function retryDelayMs(res: Response, attempt: number): number {
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (!Number.isNaN(secs)) return Math.min(secs * 1000, 30_000);
+    const date = Date.parse(retryAfter);
+    if (!Number.isNaN(date)) return Math.min(Math.max(date - Date.now(), 0), 30_000);
+  }
+  return backoffMs(attempt);
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(1000 * 2 ** (attempt - 1), 10_000) + Math.floor(Math.random() * 250);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
