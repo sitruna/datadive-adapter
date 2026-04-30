@@ -137,9 +137,16 @@ export class DataDiveSkill {
     opts?: { startDate?: string; endDate?: string }
   ): Promise<UniversalEnvelope> {
     try {
-      const raw = await getRankRadar(this.client, rankRadarId, opts);
-      const keywords = raw.data.map(transformKeywordRankHistory);
-      return toUniversalEnvelope("keyword_rank_history", keywords);
+      const [rankRaw, listRaw] = await Promise.all([
+        getRankRadar(this.client, rankRadarId, opts),
+        listRankRadars(this.client, { pageSize: 300 }),
+      ]);
+      const keywords = rankRaw.data.map(transformKeywordRankHistory);
+      const trackerRaw = listRaw.data.data.find((t) => t.id === rankRadarId);
+      const tracker = trackerRaw ? transformRankTracker(trackerRaw) : null;
+      return toUniversalEnvelope("keyword_rank_history", { tracker, keywords }, {
+        marketplace: tracker?.marketplace ?? null,
+      });
     } catch (err) {
       return this.handleError(err);
     }

@@ -171,7 +171,7 @@ server.tool(
 // --- 7. Get Rank Radar ---
 server.tool(
   "datadive_get_rank_radar",
-  "Get keyword ranking data for a specific Rank Radar tracker including historical rank positions and search volume. Defaults to last 30 days if dates not specified.",
+  "Get keyword ranking data for a specific Rank Radar tracker including historical rank positions and search volume. Returns ASIN and tracker metadata alongside keyword ranks. Defaults to last 30 days if dates not specified.",
   {
     rank_radar_id: z.string().describe("The Rank Radar tracker ID"),
     start_date: z.string().optional().describe("Start date (ISO 8601, e.g. 2026-03-14). Defaults to 30 days ago."),
@@ -179,12 +179,16 @@ server.tool(
   },
   async ({ rank_radar_id, start_date, end_date }) => {
     try {
-      const raw = await getRankRadar(client, rank_radar_id, {
-        startDate: start_date,
-        endDate: end_date,
+      const [rankRaw, listRaw] = await Promise.all([
+        getRankRadar(client, rank_radar_id, { startDate: start_date, endDate: end_date }),
+        listRankRadars(client, { pageSize: 300 }),
+      ]);
+      const keywords = rankRaw.data.map(transformKeywordRankHistory);
+      const trackerRaw = listRaw.data.data.find((t) => t.id === rank_radar_id);
+      const tracker = trackerRaw ? transformRankTracker(trackerRaw) : null;
+      const envelope = toUniversalEnvelope("keyword_rank_history", { tracker, keywords }, {
+        marketplace: tracker?.marketplace ?? null,
       });
-      const keywords = raw.data.map(transformKeywordRankHistory);
-      const envelope = toUniversalEnvelope("keyword_rank_history", keywords);
       return { content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }] };
     } catch (err) {
       return errorResult(err);

@@ -32,6 +32,8 @@ import getKeywordsFixture from "../fixtures/get-keywords.json";
 import getCompetitorsFixture from "../fixtures/get-competitors.json";
 import getRankingJuicesFixture from "../fixtures/get-ranking-juices.json";
 import getKeywordRootsFixture from "../fixtures/get-keyword-roots.json";
+import listRankRadarsFixture from "../fixtures/list-rank-radars.json";
+import getRankRadarFixture from "../fixtures/get-rank-radar.json";
 
 describe("DataDiveSkill", () => {
   let skill: DataDiveSkill;
@@ -93,6 +95,32 @@ describe("DataDiveSkill", () => {
     const data = result.data as any[];
     expect(data[0].keyword).toBe("zinc");
     expect(data[0].competing_products).toBe(10000);
+  });
+
+  it("getRankRadar returns combined tracker + keywords", async () => {
+    vi.mocked(endpoints.getRankRadar).mockResolvedValue(getRankRadarFixture as any);
+    vi.mocked(endpoints.listRankRadars).mockResolvedValue(listRankRadarsFixture as any);
+
+    const result = await skill.getRankRadar("rr-abc123");
+    expect(result.data_type).toBe("keyword_rank_history");
+    expect(result.marketplace).toBe("com");
+    const data = result.data as any;
+    expect(data.tracker.asin).toBe("B09DCJJ9R3");
+    expect(data.tracker.tracker_id).toBe("rr-abc123");
+    expect(data.keywords[0].keyword).toBe("lice shampoo");
+    expect(data.keywords[0].organic_rank).toBeUndefined(); // ranks are nested per date
+    expect(data.keywords[0].ranks[0].organic_rank).toBe(3);
+  });
+
+  it("getRankRadar handles missing tracker gracefully", async () => {
+    vi.mocked(endpoints.getRankRadar).mockResolvedValue(getRankRadarFixture as any);
+    vi.mocked(endpoints.listRankRadars).mockResolvedValue(listRankRadarsFixture as any);
+
+    const result = await skill.getRankRadar("nonexistent-id");
+    expect(result.data_type).toBe("keyword_rank_history");
+    const data = result.data as any;
+    expect(data.tracker).toBeNull();
+    expect(data.keywords).toHaveLength(2);
   });
 
   it("handles errors gracefully", async () => {
